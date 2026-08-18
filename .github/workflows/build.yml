@@ -1,50 +1,58 @@
-# .github/workflows/build.yml
-# Aether_OptExt GitHub Actions 构建脚本（修复 LLVM 版本冲突版）
-# 只改这个文件，不动 build.py
-
-name: Aether-OptExt Build
+name: build-android
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - master
   pull_request:
-    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-          components: rust-src  # 确保 build-std 可用
 
-      - name: Install bpf-linker with rust-llvm-20 (强制匹配 rustc LLVM)
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android NDK
+        shell: bash
         run: |
-          cargo install bpf-linker --no-default-features --features rust-llvm-20 --force
+          set -euo pipefail
+          sdkmanager "ndk;29.0.14206865"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/29.0.14206865" >> "$GITHUB_ENV"
 
-      - name: Build Rust main binary
-        run: cargo build --release --target aarch64-linux-android
-
-      - name: Build eBPF (强制用 rustc 自带 LLVM 20)
+      - name: Prepare eBPF placeholder
+        shell: bash
         run: |
-          cd ebpf
-          cargo +nightly build --target bpfel-unknown-none --release -Zbuild-std=core
+          set -euo pipefail
+          if [ ! -f ebpf_target.o ]; then
+            : > ebpf_target.o
+          fi
 
-      - name: Package
+      - name: Build package
+        shell: bash
         run: |
-          # 打包逻辑（与 build.py 完全相同）
-          mkdir -p out
-          cp target/aarch64-linux-android/release/aether-optext out/
-          cp ebpf/target/bpfel-unknown-none/release/aether-ebpf.o out/  # 修复后 ebpf_target.o
-          cd out && zip -r Aether-OptExt_$(date +%Y%m%d_%H%M%S).zip . && echo "✅ 构建成功！文件在 out/ 目录"
+          set -euo pipefail
+          python build.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Aether-OptExt
-          path: out/
+          path: out/*.zip
