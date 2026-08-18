@@ -26,6 +26,15 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      - name: Install eBPF build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libclang-dev
+          rustup toolchain install nightly --component rust-src
+          cargo install bpf-linker --locked
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
@@ -37,13 +46,16 @@ jobs:
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/29.0.14206865" >> "$GITHUB_ENV"
 
-      - name: Prepare eBPF placeholder
+      - name: Build eBPF object
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f ebpf_target.o ]; then
-            : > ebpf_target.o
-          fi
+          cd ebpf
+          cargo +nightly build \
+            --target bpfel-unknown-none \
+            --release \
+            -Zbuild-std=core
+          cp target/bpfel-unknown-none/release/aether-ebpf ../ebpf_target.o
 
       - name: Build package
         shell: bash
