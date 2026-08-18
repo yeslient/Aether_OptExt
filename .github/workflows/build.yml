@@ -11,9 +11,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Pin: bpfel-unknown-none has no prebuilt rust-std; we need rust-src + -Zbuild-std.
-  RUST_NIGHTLY: nightly-2025-01-15
-  BPF_LINKER_VERSION: 0.9.14
+  # 不要用浮动 nightly。这个日期对应 ~1.99，满足 aya 0.2.x / cargo-platform 的 MSRV（>= 1.91）。
+  # 也不要写 rustup target bpfel-unknown-none：没有预编译 rust-std，用 rust-src + -Zbuild-std。
+  RUST_NIGHTLY: nightly-2026-08-01
   ANDROID_NDK_VERSION: 27.2.12479018
 
 jobs:
@@ -66,7 +66,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_NIGHTLY }}
           components: rust-src
-          # Do NOT add bpfel-unknown-none here — no rust-std component exists.
+          # 禁止填写 targets: bpfel-unknown-none
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -79,14 +79,15 @@ jobs:
       - name: Install bpf-linker
         run: |
           set -euo pipefail
-          cargo +stable install bpf-linker --locked --version "${BPF_LINKER_VERSION}"
+          cargo +stable install bpf-linker --locked
           bpf-linker --version
 
       - name: Build eBPF
         working-directory: ebpf
         run: |
           set -euo pipefail
-          cargo +${RUST_NIGHTLY} build \
+          rustc +"${RUST_NIGHTLY}" --version
+          cargo +"${RUST_NIGHTLY}" build \
             --target bpfel-unknown-none \
             --release \
             -Zbuild-std=core
@@ -94,10 +95,16 @@ jobs:
       - name: Prepare ebpf_target.o
         run: |
           set -euo pipefail
-          # Match the [[bin]] / package name in ebpf/Cargo.toml.
-          src="ebpf/target/bpfel-unknown-none/release/aether-ebpf"
-          if [[ ! -f "${src}" ]]; then
-            echo "eBPF object not found at ${src}"
+          release_dir="ebpf/target/bpfel-unknown-none/release"
+          src=""
+          for candidate in aether-ebpf ebpf aether; do
+            if [[ -f "${release_dir}/${candidate}" ]]; then
+              src="${release_dir}/${candidate}"
+              break
+            fi
+          done
+          if [[ -z "${src}" ]]; then
+            echo "eBPF object not found in ${release_dir}"
             find ebpf/target -type f | head -50
             exit 1
           fi
