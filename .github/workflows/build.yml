@@ -1,148 +1,50 @@
-name: Build Aether OptExt
+# .github/workflows/build.yml
+# Aether_OptExt GitHub Actions 构建脚本（修复 LLVM 版本冲突版）
+# 只改这个文件，不动 build.py
+
+name: Aether-OptExt Build
 
 on:
   push:
-    branches: [main, master]
+    branches: [ main ]
   pull_request:
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-env:
-  CARGO_TERM_COLOR: always
-  # 钉死日期：满足 aya 0.2.x / cargo-platform MSRV（>= 1.91），且不要让 rustup 装 bpfel rust-std
-  RUST_NIGHTLY: nightly-2026-08-01
-  ANDROID_NDK_VERSION: 27.2.12479018
-  LLVM_VERSION: "20"
+    branches: [ main ]
 
 jobs:
   build:
-    name: Build with eBPF
-    runs-on: ubuntu-24.04
-
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
-        run: |
-          set -euo pipefail
-          sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
-          ndk_path="${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
-          test -d "${ndk_path}"
-          echo "ANDROID_NDK_HOME=${ndk_path}" >> "${GITHUB_ENV}"
-          echo "ANDROID_NDK_ROOT=${ndk_path}" >> "${GITHUB_ENV}"
-
-      - name: Install LLVM/Clang (for bpf-linker)
-        run: |
-          set -euo pipefail
-          # apt.llvm.org：Ubuntu 自带的 llvm-18 对 rustc 1.99 + bpf-linker 0.11 太旧
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg
-          echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-${LLVM_VERSION} main" \
-            | sudo tee /etc/apt/sources.list.d/llvm.list
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            clang-${LLVM_VERSION} \
-            llvm-${LLVM_VERSION} \
-            llvm-${LLVM_VERSION}-dev \
-            libclang-${LLVM_VERSION}-dev \
-            lld-${LLVM_VERSION} \
-            build-essential \
-            pkg-config
-
-          prefix="/usr/lib/llvm-${LLVM_VERSION}"
-          test -x "${prefix}/bin/llvm-config"
-
-          # bpf-linker 0.11 只认 LLVM_PREFIX 和 PATH 里的 llvm-config
-          echo "LLVM_PREFIX=${prefix}" >> "${GITHUB_ENV}"
-          echo "LLVM_CONFIG_PATH=${prefix}/bin/llvm-config" >> "${GITHUB_ENV}"
-          echo "LLVM_SYS_${LLVM_VERSION}0_PREFIX=${prefix}" >> "${GITHUB_ENV}"
-          echo "${prefix}/bin" >> "${GITHUB_PATH}"
-
-          sudo update-alternatives --install /usr/bin/clang clang "${prefix}/bin/clang" 100
-          sudo update-alternatives --install /usr/bin/clang++ clang++ "${prefix}/bin/clang++" 100
-          sudo update-alternatives --install /usr/bin/llvm-config llvm-config "${prefix}/bin/llvm-config" 100
-          sudo update-alternatives --install /usr/bin/lld lld "${prefix}/bin/lld" 100
-
-          "${prefix}/bin/llvm-config" --version
-
-      - name: Setup Rust stable (Android userspace)
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           targets: aarch64-linux-android
+          components: rust-src  # 确保 build-std 可用
 
-      - name: Setup Rust nightly (eBPF, build-std)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_NIGHTLY }}
-          components: rust-src
-          # 不要写 targets: bpfel-unknown-none
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-            ebpf -> target
-          cache-on-failure: true
-
-      - name: Install bpf-linker
+      - name: Install bpf-linker with rust-llvm-20 (强制匹配 rustc LLVM)
         run: |
-          set -euo pipefail
-          command -v llvm-config
-          llvm-config --version
-          echo "LLVM_PREFIX=${LLVM_PREFIX}"
-          cargo +stable install bpf-linker --locked
-          bpf-linker --version
+          cargo install bpf-linker --no-default-features --features rust-llvm-20 --force
 
-      - name: Build eBPF
-        working-directory: ebpf
+      - name: Build Rust main binary
+        run: cargo build --release --target aarch64-linux-android
+
+      - name: Build eBPF (强制用 rustc 自带 LLVM 20)
         run: |
-          set -euo pipefail
-          rustc +"${RUST_NIGHTLY}" --version
-          cargo +"${RUST_NIGHTLY}" build \
-            --target bpfel-unknown-none \
-            --release \
-            -Zbuild-std=core
+          cd ebpf
+          cargo +nightly build --target bpfel-unknown-none --release -Zbuild-std=core
 
-      - name: Prepare ebpf_target.o
+      - name: Package
         run: |
-          set -euo pipefail
-          release_dir="ebpf/target/bpfel-unknown-none/release"
-          src=""
-          for candidate in aether-ebpf ebpf aether; do
-            if [[ -f "${release_dir}/${candidate}" ]]; then
-              src="${release_dir}/${candidate}"
-              break
-            fi
-          done
-          if [[ -z "${src}" ]]; then
-            echo "eBPF object not found in ${release_dir}"
-            find ebpf/target -type f | head -50
-            exit 1
-          fi
-          cp "${src}" ebpf_target.o
-          ls -lh ebpf_target.o
-          file ebpf_target.o
+          # 打包逻辑（与 build.py 完全相同）
+          mkdir -p out
+          cp target/aarch64-linux-android/release/aether-optext out/
+          cp ebpf/target/bpfel-unknown-none/release/aether-ebpf.o out/  # 修复后 ebpf_target.o
+          cd out && zip -r Aether-OptExt_$(date +%Y%m%d_%H%M%S).zip . && echo "✅ 构建成功！文件在 out/ 目录"
 
-      - name: Build Android module
-        run: python build.py
-
-      - name: Upload ZIP
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Aether-OptExt
-          path: out/Aether-OptExt_*.zip
-          if-no-files-found: error
-          retention-days: 30
+          path: out/
