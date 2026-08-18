@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  # Pin: bpfel-unknown-none has no prebuilt rust-std; we need rust-src + -Zbuild-std.
+  RUST_NIGHTLY: nightly-2025-01-15
+  BPF_LINKER_VERSION: 0.9.14
+  ANDROID_NDK_VERSION: 27.2.12479018
+
 jobs:
   build:
     name: Build with eBPF
@@ -21,67 +28,80 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: "3.12"
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install Android NDK
         run: |
-          sdkmanager --install "ndk;27.2.12479018"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          set -euo pipefail
+          sdkmanager --install "ndk;${ANDROID_NDK_VERSION}"
+          ndk_path="${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}"
+          test -d "${ndk_path}"
+          echo "ANDROID_NDK_HOME=${ndk_path}" >> "${GITHUB_ENV}"
+          echo "ANDROID_NDK_ROOT=${ndk_path}" >> "${GITHUB_ENV}"
 
       - name: Install LLVM/Clang (for bpf-linker)
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             clang-18 llvm-18 llvm-18-dev libclang-18-dev lld-18 \
             build-essential pkg-config
-          # 让 llvm-sys / bpf-linker 能找到 LLVM
-          echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
-          echo "LLVM_CONFIG_PATH=/usr/bin/llvm-config-18" >> "$GITHUB_ENV"
+          echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> "${GITHUB_ENV}"
+          echo "LLVM_CONFIG_PATH=/usr/bin/llvm-config-18" >> "${GITHUB_ENV}"
           sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
           sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
           llvm-config-18 --version
-          llvm-config-18 --libs
 
-      - name: Setup Rust stable
+      - name: Setup Rust stable (Android userspace)
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: stable
           targets: aarch64-linux-android
 
-      - name: Setup Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Setup Rust nightly (eBPF, build-std)
+        uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: ${{ env.RUST_NIGHTLY }}
           components: rust-src
-          targets: bpfel-unknown-none
+          # Do NOT add bpfel-unknown-none here — no rust-std component exists.
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            ebpf -> target
+          cache-on-failure: true
 
       - name: Install bpf-linker
         run: |
-          cargo install bpf-linker --locked
+          set -euo pipefail
+          cargo +stable install bpf-linker --locked --version "${BPF_LINKER_VERSION}"
           bpf-linker --version
 
       - name: Build eBPF
         working-directory: ebpf
         run: |
-          cargo +nightly build \
+          set -euo pipefail
+          cargo +${RUST_NIGHTLY} build \
             --target bpfel-unknown-none \
             --release \
             -Zbuild-std=core
 
       - name: Prepare ebpf_target.o
         run: |
-          # 产物名以实际为准，常见如下
-          if [ -f ebpf/target/bpfel-unknown-none/release/aether-ebpf ]; then
-            cp ebpf/target/bpfel-unknown-none/release/aether-ebpf ebpf_target.o
-          elif [ -f ebpf/target/bpfel-unknown-none/release/ebpf ]; then
-            cp ebpf/target/bpfel-unknown-none/release/ebpf ebpf_target.o
-          else
-            echo "eBPF build output not found:"
+          set -euo pipefail
+          # Match the [[bin]] / package name in ebpf/Cargo.toml.
+          src="ebpf/target/bpfel-unknown-none/release/aether-ebpf"
+          if [[ ! -f "${src}" ]]; then
+            echo "eBPF object not found at ${src}"
             find ebpf/target -type f | head -50
             exit 1
           fi
+          cp "${src}" ebpf_target.o
           ls -lh ebpf_target.o
           file ebpf_target.o
 
