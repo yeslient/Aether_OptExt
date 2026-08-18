@@ -2,9 +2,7 @@ name: Build Aether OptExt
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
   pull_request:
   workflow_dispatch:
 
@@ -13,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Aether OptExt
+    name: Build with eBPF
     runs-on: ubuntu-24.04
 
     steps:
@@ -34,6 +32,20 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
+      - name: Install LLVM/Clang (for bpf-linker)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang-18 llvm-18 llvm-18-dev libclang-18-dev lld-18 \
+            build-essential pkg-config
+          # 让 llvm-sys / bpf-linker 能找到 LLVM
+          echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+          echo "LLVM_CONFIG_PATH=/usr/bin/llvm-config-18" >> "$GITHUB_ENV"
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
+          llvm-config-18 --version
+          llvm-config-18 --libs
+
       - name: Setup Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -43,27 +55,12 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
-
-      - name: Install eBPF dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm lld libclang-dev
+          targets: bpfel-unknown-none
 
       - name: Install bpf-linker
         run: |
           cargo install bpf-linker --locked
-
-      - name: Check toolchain
-        run: |
-          rustc --version
-          cargo --version
-          rustc +nightly --version
-          python --version
-          clang --version
-          llvm-config --version
           bpf-linker --version
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-          ls -la "$ANDROID_NDK_HOME"
 
       - name: Build eBPF
         working-directory: ebpf
@@ -73,22 +70,25 @@ jobs:
             --release \
             -Zbuild-std=core
 
-      - name: Prepare eBPF object
+      - name: Prepare ebpf_target.o
         run: |
-          cp ebpf/target/bpfel-unknown-none/release/aether-ebpf ebpf_target.o
+          # 产物名以实际为准，常见如下
+          if [ -f ebpf/target/bpfel-unknown-none/release/aether-ebpf ]; then
+            cp ebpf/target/bpfel-unknown-none/release/aether-ebpf ebpf_target.o
+          elif [ -f ebpf/target/bpfel-unknown-none/release/ebpf ]; then
+            cp ebpf/target/bpfel-unknown-none/release/ebpf ebpf_target.o
+          else
+            echo "eBPF build output not found:"
+            find ebpf/target -type f | head -50
+            exit 1
+          fi
           ls -lh ebpf_target.o
           file ebpf_target.o
 
       - name: Build Android module
-        run: |
-          python build.py
+        run: python build.py
 
-      - name: Show build output
-        run: |
-          ls -lah out/
-          ls -lah magisk_module/
-
-      - name: Upload Aether OptExt ZIP
+      - name: Upload ZIP
         uses: actions/upload-artifact@v4
         with:
           name: Aether-OptExt
