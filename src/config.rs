@@ -41,7 +41,17 @@ pub struct AppConfig {
 
 /// 检测 asoul 模块是否安装（其守护进程以 /data/adb/asoul_affinity_opt 为根）
 pub fn asoul_detected() -> bool {
-    std::path::Path::new("/data/adb/asoul_affinity_opt").exists()
+    let candidates = [
+        "/data/adb/modules/asoul_affinity_opt",
+        "/data/adb/asoul_affinity_opt",
+    ];
+    for p in candidates {
+        let path = std::path::Path::new(p);
+        if path.is_dir() && !path.join("disable").exists() {
+            return true;
+        }
+    }
+    false
 }
 
 /// 读取 asoul 兼容名单（每行一个包名，# 开头为注释），仅在 asoul 模块存在时读取
