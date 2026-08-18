@@ -17,6 +17,9 @@ def die(m): print(f"[ERROR] {m}"); sys.exit(1)
 def gen_ebpf_bytecode():
     """用 WSL 编译 aya-ebpf (Rust) eBPF 程序 -> ebpf_target.o"""
     o_file = SCRIPT_DIR / "ebpf_target.o"
+    if sys.platform != "win32":
+        warn("eBPF: non-Windows build host, skip WSL regeneration")
+        return
     # Windows 项目路径 -> WSL 路径 (/mnt/g/aether_opt_ext)
     drive = SCRIPT_DIR.drive.lower().rstrip(':')
     wsl_path = "/mnt/" + drive + SCRIPT_DIR.as_posix().split(':', 1)[1]
