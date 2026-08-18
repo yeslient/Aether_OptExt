@@ -1,0 +1,70 @@
+name: Build Aether OptExt
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Android ARM64
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        uses: android-actions/setup-ndk@v3
+        id: ndk
+        with:
+          ndk-version: r27c
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Set Android NDK environment
+        run: |
+          echo "ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=${{ steps.ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+          python --version
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          ls -la "$ANDROID_NDK_HOME"
+
+      - name: Build
+        run: |
+          python build.py
+
+      - name: Show output
+        run: |
+          echo "Build output:"
+          ls -lah out/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aether-OptExt
+          path: out/Aether-OptExt_*.zip
+          if-no-files-found: error
+          retention-days: 30
