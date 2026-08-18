@@ -11,10 +11,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # 不要用浮动 nightly。这个日期对应 ~1.99，满足 aya 0.2.x / cargo-platform 的 MSRV（>= 1.91）。
-  # 也不要写 rustup target bpfel-unknown-none：没有预编译 rust-std，用 rust-src + -Zbuild-std。
+  # 钉死日期：满足 aya 0.2.x / cargo-platform MSRV（>= 1.91），且不要让 rustup 装 bpfel rust-std
   RUST_NIGHTLY: nightly-2026-08-01
   ANDROID_NDK_VERSION: 27.2.12479018
+  LLVM_VERSION: "20"
 
 jobs:
   build:
@@ -45,15 +45,36 @@ jobs:
       - name: Install LLVM/Clang (for bpf-linker)
         run: |
           set -euo pipefail
+          # apt.llvm.org：Ubuntu 自带的 llvm-18 对 rustc 1.99 + bpf-linker 0.11 太旧
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/llvm-snapshot.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-${LLVM_VERSION} main" \
+            | sudo tee /etc/apt/sources.list.d/llvm.list
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            clang-18 llvm-18 llvm-18-dev libclang-18-dev lld-18 \
-            build-essential pkg-config
-          echo "LLVM_SYS_180_PREFIX=/usr/lib/llvm-18" >> "${GITHUB_ENV}"
-          echo "LLVM_CONFIG_PATH=/usr/bin/llvm-config-18" >> "${GITHUB_ENV}"
-          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
-          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
-          llvm-config-18 --version
+            clang-${LLVM_VERSION} \
+            llvm-${LLVM_VERSION} \
+            llvm-${LLVM_VERSION}-dev \
+            libclang-${LLVM_VERSION}-dev \
+            lld-${LLVM_VERSION} \
+            build-essential \
+            pkg-config
+
+          prefix="/usr/lib/llvm-${LLVM_VERSION}"
+          test -x "${prefix}/bin/llvm-config"
+
+          # bpf-linker 0.11 只认 LLVM_PREFIX 和 PATH 里的 llvm-config
+          echo "LLVM_PREFIX=${prefix}" >> "${GITHUB_ENV}"
+          echo "LLVM_CONFIG_PATH=${prefix}/bin/llvm-config" >> "${GITHUB_ENV}"
+          echo "LLVM_SYS_${LLVM_VERSION}0_PREFIX=${prefix}" >> "${GITHUB_ENV}"
+          echo "${prefix}/bin" >> "${GITHUB_PATH}"
+
+          sudo update-alternatives --install /usr/bin/clang clang "${prefix}/bin/clang" 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ "${prefix}/bin/clang++" 100
+          sudo update-alternatives --install /usr/bin/llvm-config llvm-config "${prefix}/bin/llvm-config" 100
+          sudo update-alternatives --install /usr/bin/lld lld "${prefix}/bin/lld" 100
+
+          "${prefix}/bin/llvm-config" --version
 
       - name: Setup Rust stable (Android userspace)
         uses: dtolnay/rust-toolchain@stable
@@ -66,7 +87,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_NIGHTLY }}
           components: rust-src
-          # 禁止填写 targets: bpfel-unknown-none
+          # 不要写 targets: bpfel-unknown-none
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -79,6 +100,9 @@ jobs:
       - name: Install bpf-linker
         run: |
           set -euo pipefail
+          command -v llvm-config
+          llvm-config --version
+          echo "LLVM_PREFIX=${LLVM_PREFIX}"
           cargo +stable install bpf-linker --locked
           bpf-linker --version
 
