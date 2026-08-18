@@ -1,4 +1,3 @@
-```yaml
 name: Build Aether OptExt
 
 on:
@@ -18,133 +17,54 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      # ------------------------------------------------------------
-      # 1. 获取源码
-      # ------------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------
-      # 2. 安装 Python
-      # ------------------------------------------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      # ------------------------------------------------------------
-      # 3. 安装 Android SDK
-      # ------------------------------------------------------------
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      # ------------------------------------------------------------
-      # 4. 安装 Android NDK
-      #
-      # build.py 会自动寻找:
-      # $ANDROID_NDK_HOME
-      # $ANDROID_HOME
-      # $ANDROID_SDK_ROOT
-      # ------------------------------------------------------------
       - name: Install Android NDK
         run: |
           sdkmanager --install "ndk;27.2.12479018"
-
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
-      # ------------------------------------------------------------
-      # 5. 安装 Rust stable
-      # 用于编译 Android ARM64 主程序
-      # ------------------------------------------------------------
       - name: Setup Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
 
-      # ------------------------------------------------------------
-      # 6. 安装 Rust nightly + rust-src
-      # 用于编译 ebpf/
-      # ------------------------------------------------------------
       - name: Setup Rust nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
 
-      # ------------------------------------------------------------
-      # 7. 安装 eBPF 编译环境
-      #
-      # Aya 的 Rust eBPF 编译需要 bpf-linker。
-      #
-      # Ubuntu 24.04 自带的 LLVM/Clang 版本可能随着 runner
-      # 镜像变化，所以这里明确安装 LLVM 19。
-      # ------------------------------------------------------------
       - name: Install eBPF dependencies
         run: |
           sudo apt-get update
+          sudo apt-get install -y clang llvm lld libclang-dev
 
-          sudo apt-get install -y \
-            clang-19 \
-            llvm-19 \
-            llvm-19-dev \
-            libclang-19-dev \
-            lld-19
-
-          echo "LLVM_SYS_190_PREFIX=/usr/lib/llvm-19" >> "$GITHUB_ENV"
-
-          echo "/usr/lib/llvm-19/bin" >> "$GITHUB_PATH"
-
-      # ------------------------------------------------------------
-      # 8. 安装 bpf-linker
-      # ------------------------------------------------------------
       - name: Install bpf-linker
         run: |
           cargo install bpf-linker --locked
 
-      # ------------------------------------------------------------
-      # 9. 检查工具链
-      # ------------------------------------------------------------
       - name: Check toolchain
         run: |
-          echo "===== Rust ====="
           rustc --version
           cargo --version
-
-          echo
-          echo "===== Nightly ====="
           rustc +nightly --version
-
-          echo
-          echo "===== Python ====="
           python --version
-
-          echo
-          echo "===== Clang ====="
-          clang-19 --version
-
-          echo
-          echo "===== LLVM ====="
-          llvm-config-19 --version
-
-          echo
-          echo "===== bpf-linker ====="
+          clang --version
+          llvm-config --version
           bpf-linker --version
-
-          echo
-          echo "===== Android NDK ====="
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
           ls -la "$ANDROID_NDK_HOME"
 
-      # ------------------------------------------------------------
-      # 10. 编译 Rust eBPF
-      #
-      # 对应项目 README:
-      #
-      # cargo +nightly build \
-      #   --target bpfel-unknown-none \
-      #   --release \
-      #   -Zbuild-std=core
-      # ------------------------------------------------------------
       - name: Build eBPF
         working-directory: ebpf
         run: |
@@ -153,58 +73,21 @@ jobs:
             --release \
             -Zbuild-std=core
 
-      # ------------------------------------------------------------
-      # 11. 把 eBPF ELF 复制到项目根目录
-      #
-      # src/bpf.rs:
-      #
-      # include_bytes!(
-      #   concat!(env!("CARGO_MANIFEST_DIR"), "/ebpf_target.o")
-      # )
-      #
-      # build.py:
-      #
-      # 如果 ebpf_target.o 存在，就不会调用 Windows/WSL 编译。
-      # ------------------------------------------------------------
       - name: Prepare eBPF object
         run: |
           cp ebpf/target/bpfel-unknown-none/release/aether-ebpf ebpf_target.o
-
-          echo "Generated eBPF object:"
           ls -lh ebpf_target.o
-
           file ebpf_target.o
 
-      # ------------------------------------------------------------
-      # 12. 编译主程序 + 打包 Magisk/KernelSU 模块
-      #
-      # build.py 会：
-      # - 检测 Android NDK
-      # - 配置 aarch64-linux-android linker
-      # - cargo build --release
-      # - 复制 aether-optext
-      # - 生成 module.prop
-      # - 打包 ZIP
-      # ------------------------------------------------------------
       - name: Build Android module
         run: |
           python build.py
 
-      # ------------------------------------------------------------
-      # 13. 检查最终产物
-      # ------------------------------------------------------------
       - name: Show build output
         run: |
-          echo "===== out/ ====="
           ls -lah out/
-
-          echo
-          echo "===== module ====="
           ls -lah magisk_module/
 
-      # ------------------------------------------------------------
-      # 14. 上传 ZIP
-      # ------------------------------------------------------------
       - name: Upload Aether OptExt ZIP
         uses: actions/upload-artifact@v4
         with:
@@ -212,4 +95,3 @@ jobs:
           path: out/Aether-OptExt_*.zip
           if-no-files-found: error
           retention-days: 30
-```
